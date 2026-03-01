@@ -26,6 +26,18 @@ jobs:
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
 
+        - name: Decode Cookies
+        run: |
+          # Base64 se vapas .txt mein convert karna safely
+          echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+          # Check if file starts correctly
+          head -n 2 cookies.txt
+
+      - name: Run Bot
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        run: python bot.py
+
       - name: Setup Cookies
         run: |
           echo "${{ secrets.YT_COOKIES }}" > cookies.txt
