@@ -1,120 +1,120 @@
 import os
 import asyncio
 import logging
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from yt_dlp import YoutubeDL
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Logging Setup
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Token from Environment Variable
 TOKEN = os.getenv("TG_TOKEN")
-
-# Simple memory storage for User Settings (Per-user)
+# Settings Storage: {user_id: {"quality": "1080", "mode": "fixed", "cleanup": 5}}
 user_settings = {}
+
+# Progress Hook for yt-dlp
+def progress_hook(d, context, chat_id, message_id):
+    if d['status'] == 'downloading':
+        p = d.get('_percent_str', '0%')
+        s = d.get('_speed_str', '0B/s')
+        e = d.get('_eta_str', '00:00')
+        text = f"⬇️ **Downloading...**\n━━━━━━━━━━━━\n📊 Progress: {p}\n🚀 Speed: {s}\n⏳ ETA: {e}"
+        # Running edit in async loop
+        asyncio.run_coroutine_threadsafe(
+            context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode="Markdown"),
+            context.application.loop
+        )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_settings:
         user_settings[user_id] = {"quality": "best", "mode": "fixed", "cleanup": 5}
-    await update.message.reply_text("👋 Hello Akash! Send me a YouTube link to download.\nUse /settings to change quality.")
+    await update.message.reply_text("👋 Welcome Akash! Send a YouTube link to start.\nUse /settings to configure quality.")
 
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Settings menu using Inline Keyboard"""
+async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🎬 Default Video Quality", callback_data="set_quality")],
-        [InlineKeyboardButton("🔁 Download Mode", callback_data="set_mode")],
+        [InlineKeyboardButton("🎬 Default Quality", callback_data="set_q")],
+        [InlineKeyboardButton("🔁 Download Mode", callback_data="set_m")],
+        [InlineKeyboardButton("🧹 Cleanup Timer", callback_data="set_c")],
         [InlineKeyboardButton("❌ Close", callback_data="close")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("⚙️ **Settings Menu**", reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text("⚙️ **Bot Settings**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     await query.answer()
-    
-    if query.data == "set_quality":
-        keyboard = [
-            [InlineKeyboardButton("360p", callback_data="q_360"), InlineKeyboardButton("720p", callback_data="q_720")],
-            [InlineKeyboardButton("1080p", callback_data="q_1080"), InlineKeyboardButton("4K/Best", callback_data="q_best")]
-        ]
-        await query.edit_message_text(text="Select Default Quality:", reply_markup=InlineKeyboardMarkup(keyboard))
-    
+
+    if query.data == "set_q":
+        keys = [[InlineKeyboardButton(q, callback_data=f"q_{q}")] for q in ["360", "480", "720", "1080", "best"]]
+        await query.edit_message_text("Select Video Quality:", reply_markup=InlineKeyboardMarkup(keys))
     elif query.data.startswith("q_"):
-        quality = query.data.split("_")[1]
-        user_settings[update.effective_user.id]["quality"] = quality
-        await query.edit_message_text(text=f"✅ Default quality set to: {quality}")
-        
+        val = query.data.split("_")[1]
+        user_settings[user_id]["quality"] = val
+        await query.edit_message_text(f"✅ Default quality set to {val}p.")
     elif query.data == "close":
         await query.message.delete()
 
-def download_video_sync(url, user_id, message_id):
-    """yt-dlp python API (Runs in thread to avoid blocking)"""
-    quality_pref = user_settings.get(user_id, {}).get("quality", "best")
-    format_string = "bestvideo+bestaudio/best" if quality_pref == "best" else f"bestvideo[height<={quality_pref}]+bestaudio/best"
-    
-    ydl_opts = {
-        'format': format_string,
-        'merge_output_format': 'mp4',
-        'outtmpl': f'download_{user_id}_%(id)s.%(ext)s',
-        'cookiefile': 'cookies.txt', # Using your cookies
-        'quiet': True,
-        'no_warnings': True
-    }
-    
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        # Ensure correct extension after merge
-        if not filename.endswith('.mp4'):
-            filename = filename.rsplit('.', 1)[0] + '.mp4'
-        return filename
-
-async def process_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     user_id = update.effective_user.id
-    
-    if "youtu" not in url:
+    if "youtube.com" not in url and "youtu.be" not in url:
         return
-        
-    msg = await update.message.reply_text("⏳ Processing link & checking cookies...")
+
+    status_msg = await update.message.reply_text("🔎 Analyzing video...")
     
+    # User Preferences
+    pref = user_settings.get(user_id, {"quality": "best", "cleanup": 5})
+    quality = pref["quality"]
+    format_str = "bestvideo+bestaudio/best" if quality == "best" else f"bestvideo[height<={quality}]+bestaudio/best"
+
+    ydl_opts = {
+        'format': format_str,
+        'merge_output_format': 'mp4',
+        'cookiefile': 'cookies.txt',
+        'outtmpl': f'downloads/{user_id}_%(id)s.%(ext)s',
+        'progress_hooks': [lambda d: progress_hook(d, context, update.effective_chat.id, status_msg.message_id)],
+        'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}],
+    }
+
     try:
-        # Run yt-dlp in a separate thread so bot doesn't freeze
-        filename = await asyncio.to_thread(download_video_sync, url, user_id, msg.message_id)
+        if not os.path.exists('downloads'): os.makedirs('downloads')
         
-        await msg.edit_text("⬆️ Downloading complete. Uploading to Telegram as Document...")
+        with YoutubeDL(ydl_opts) as ydl:
+            info = await asyncio.to_thread(ydl.extract_info, url, download=True)
+            file_path = ydl.prepare_filename(info).rsplit('.', 1)[0] + '.mp4'
+
+        await status_msg.edit_text("⬆️ Uploading Document (No Compression)...")
         
-        # Uploading strictly as document as per your rules
-        with open(filename, 'rb') as doc:
+        with open(file_path, 'rb') as f:
             await context.bot.send_document(
                 chat_id=update.effective_chat.id,
-                document=doc,
-                caption="✅ Downloaded using yt-dlp Python API",
-                reply_to_message_id=update.message.message_id,
-                write_timeout=60,
-                read_timeout=60
+                document=f,
+                caption=f"✅ {info['title']}\n🌟 Quality: {quality}p",
+                write_timeout=300
             )
-            
-        # Auto Cleanup
-        os.remove(filename)
-        await msg.delete()
-        
+
+        # Cleanup Logic 
+        await status_msg.delete()
+        asyncio.create_task(auto_delete(file_path, pref['cleanup']))
+
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await msg.edit_text(f"❌ **Error:**\n`{str(e)}`\nMake sure your cookies.txt is valid.", parse_mode="Markdown")
+        await status_msg.edit_text(f"❌ Error: {str(e)}")
+
+async def auto_delete(path, minutes):
+    await asyncio.sleep(minutes * 60)
+    if os.path.exists(path):
+        os.remove(path)
+        logger.info(f"Cleaned up: {path}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("settings", settings)) # Settings feature added
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_link))
-    
-    print("Bot is running...")
+    app.add_handler(CommandHandler("settings", settings_menu))
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_download))
     app.run_polling()
 
 if __name__ == "__main__":
