@@ -1,8 +1,8 @@
-name: 24/7 Ultimate 4K Downloader (API Bypass)
+name: 24/7 Pro 4K Downloader (No-Cookies Bypass)
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *' # Har 10 min mein check karega
   workflow_dispatch:
 
 jobs:
@@ -12,16 +12,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fetch Message
+      - name: Fetch Link from Telegram
         id: fetch_msg
         run: |
-          # Latest message uthana
+          # Latest message fetch logic
           RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/getUpdates")
           LAST_MSG=$(echo "$RESPONSE" | jq -r '.result[-1].message.text')
           MSG_DATE=$(echo "$RESPONSE" | jq -r '.result[-1].message.date')
           CURRENT_DATE=$(date +%s)
           
-          if [[ $((CURRENT_DATE - MSG_DATE)) -le 330 ]] && [[ "$LAST_MSG" == *"yout"* ]]; then
+          # 10 minute purana link process nahi hoga (Duplicate avoid karne ke liye)
+          if [[ $((CURRENT_DATE - MSG_DATE)) -le 600 ]] && [[ "$LAST_MSG" == *"yout"* ]]; then
             echo "URL=$LAST_MSG" >> $GITHUB_ENV
             echo "PROCESS=true" >> $GITHUB_ENV
           else
@@ -30,58 +31,64 @@ jobs:
 
       - name: Setup Tools
         if: env.PROCESS == 'true'
-        run: sudo apt-get update && sudo apt-get install jq curl -y
+        run: |
+          sudo apt-get update && sudo apt-get install ffmpeg jq curl -y
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: Bypass and Download (4K Quality)
+      - name: Advanced Bypass Download
         if: env.PROCESS == 'true'
         run: |
-          # Cobalt API ka use karke 4K link nikalna
-          # Yeh wahi technique hai jo badi websites use karti hain
+          echo "Starting Bypass Logic for: ${{ env.URL }}"
+          
+          # 1. Sabse pehle Cobalt API (Instance 1)
           API_RES=$(curl -s -X POST https://api.cobalt.tools/api/json \
             -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            -d "{
-              \"url\": \"${{ env.URL }}\",
-              \"videoQuality\": \"1080\",
-              \"downloadMode\": \"video\",
-              \"filenameStyle\": \"basic\"
-            }")
+            -d "{\"url\": \"${{ env.URL }}\", \"videoQuality\": \"1080\", \"downloadMode\": \"video\"}")
+          DL_URL=$(echo "$API_RES" | jq -r '.url // .picker[0].url')
 
-          # Direct download URL nikalna
-          DL_URL=$(echo "$API_RES" | jq -r '.url')
-
+          # 2. Agar fail hua toh Cobalt Instance 2
           if [ "$DL_URL" == "null" ] || [ -z "$DL_URL" ]; then
-            echo "API failed, trying fallback method..."
-            # Fallback for small clips
-            DL_URL=$(echo "$API_RES" | jq -r '.picker[0].url')
+            echo "Cobalt 1 failed, trying Cobalt 2..."
+            API_RES=$(curl -s -X POST https://cobalt.sh/api/json \
+              -H "Content-Type: application/json" \
+              -d "{\"url\": \"${{ env.URL }}\", \"videoQuality\": \"1080\"}")
+            DL_URL=$(echo "$API_RES" | jq -r '.url // .picker[0].url')
           fi
 
-          echo "Downloading from: $DL_URL"
-          curl -L "$DL_URL" -o "video.mp4"
+          # 3. Final Download
+          if [ "$DL_URL" != "null" ] && [ ! -z "$DL_URL" ]; then
+            echo "Downloading from API: $DL_URL"
+            curl -L "$DL_URL" -o "video.mp4"
+          else
+            echo "All APIs failed, falling back to yt-dlp with iOS bypass..."
+            /usr/local/bin/yt-dlp -f "bestvideo[height<=1080]+bestaudio/best" \
+            --merge-output-format mp4 \
+            --extractor-args "youtube:player_client=ios,web" \
+            --geo-bypass "${{ env.URL }}" -o "video.mp4" || echo "yt-dlp failed too"
+          fi
 
-      - name: Send Direct to Telegram
+      - name: Delivery (Direct Video or GoFile)
         if: env.PROCESS == 'true'
         run: |
-          FILE_SIZE=$(stat -c%s "video.mp4")
-          # Agar file 200 bytes se kam hai toh iska matlab error download hua hai
-          if [ "$FILE_SIZE" -lt 1000 ]; then
-            echo "Download failed or empty file."
+          if [ ! -f "video.mp4" ] || [ $(stat -c%s "video.mp4") -lt 1000 ]; then
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
+                 -d "chat_id=${{ secrets.CHAT_ID }}&text=❌ Sorry Akash! Yeh video region-locked hai aur bypass nahi ho saki."
             exit 1
           fi
 
-          # Telegram 50MB limit check
-          MAX_SIZE=48000000 
-          
+          FILE_SIZE=$(stat -c%s "video.mp4")
+          MAX_SIZE=48000000 # 48MB (Telegram Bot Limit)
+
           if [ "$FILE_SIZE" -lt "$MAX_SIZE" ]; then
             echo "Sending direct video..."
-            curl -v -F "video=@video.mp4" "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendVideo?chat_id=${{ secrets.CHAT_ID }}&caption=✅ Done! 4K Clip Ready for Editing."
+            curl -F "video=@video.mp4" "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendVideo?chat_id=${{ secrets.CHAT_ID }}&caption=✅ 4K/1080p Clip Ready for Editing!"
           else
-            echo "File too big for direct send, uploading to GoFile..."
-            # GoFile upload logic as fallback
+            echo "Uploading to GoFile..."
             UPLOAD_RES=$(curl -F "file=@video.mp4" "https://$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name').gofile.io/contents/uploadfile")
             DL_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage')
             
-            MSG="✅ *4K Video (Large File):*%0A🔗 *Link:* $DL_LINK"
+            MSG="✅ *Video Ready (Large File)*%0A%0A📽️ Size: $((FILE_SIZE/1048576)) MB%0A🔗 Link: $DL_LINK"
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
                  -d "chat_id=${{ secrets.CHAT_ID }}&text=$MSG&parse_mode=Markdown"
           fi
