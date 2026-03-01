@@ -1,89 +1,84 @@
-name: 24/7 Telegram Video Downloader
+name: 24/7 Pro 4K Downloader
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Har 5 minute mein chalega
-  workflow_dispatch: # Manual test ke liye button dega
+    - cron: '*/5 * * * *' # Har 5 minute mein link check karega
+  workflow_dispatch: # Manual test ke liye button
 
 jobs:
-  check-and-download:
+  download-process:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch Latest Telegram Message
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch and Filter Telegram Message
         id: fetch_msg
         run: |
-          # Telegram se latest message check karna
+          # Latest message fetch karna
           RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/getUpdates")
           
-          # Message ka text aur time nikalna
+          # Message data extract karna
           LAST_MSG=$(echo "$RESPONSE" | jq -r '.result[-1].message.text')
           MSG_DATE=$(echo "$RESPONSE" | jq -r '.result[-1].message.date')
           CURRENT_DATE=$(date +%s)
           
-          # Check karna ki message naya hai ya purana (300 seconds = 5 mins)
+          # Check: Kya message pichle 5.5 minutes (330s) ke andar aaya hai?
           TIME_DIFF=$((CURRENT_DATE - MSG_DATE))
           
-          if [[ "$TIME_DIFF" -le 330 ]]; then
-            if [[ "$LAST_MSG" == *"youtube.com"* ]] || [[ "$LAST_MSG" == *"youtu.be"* ]]; then
-              echo "Naya YouTube link mil gaya!"
-              echo "VIDEO_URL=$LAST_MSG" >> $GITHUB_ENV
-              echo "PROCESS=true" >> $GITHUB_ENV
-            else
-              echo "Link YouTube ka nahi hai."
-              echo "PROCESS=false" >> $GITHUB_ENV
-            fi
+          if [[ "$TIME_DIFF" -le 330 ]] && [[ "$LAST_MSG" == *"yout"* ]]; then
+            echo "URL=$LAST_MSG" >> $GITHUB_ENV
+            echo "PROCESS=true" >> $GITHUB_ENV
+            echo "🚀 Naya link mila: $LAST_MSG"
           else
-            echo "Koi naya message nahi hai pichle 5 minute mein."
             echo "PROCESS=false" >> $GITHUB_ENV
+            echo "😴 Koi naya link nahi mila."
           fi
 
-      - name: Download 4K Video (Multi-Mirror Bypass)
+      - name: Setup Pro Environment
         if: env.PROCESS == 'true'
         run: |
-          # Video ID nikalna
-          VIDEO_ID=$(echo "${{ env.VIDEO_URL }}" | sed -n 's/.*v=\([^&?]*\).*/\1/p; s/.*be\/\([^&?]*\).*/\1/p')
-          
-          # Working Mirrors list
+          sudo apt-get update
+          sudo apt-get install ffmpeg jq nodejs -y
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
+      - name: Smart Download (Mirror & Regional Bypass)
+        if: env.PROCESS == 'true'
+        run: |
+          VIDEO_ID=$(echo "${{ env.URL }}" | sed -n 's/.*v=\([^&?]*\).*/\1/p; s/.*be\/\([^&?]*\).*/\1/p')
           MIRRORS=("https://yewtu.be" "https://invidious.projectsegfau.lt" "https://inv.tux.rs" "https://invidious.nerdvpn.de")
           
           SUCCESS=false
+          # Sabse pehle Mirrors try karein (Regional bypass ke liye)
           for MIRROR in "${MIRRORS[@]}"; do
-            echo "Trying Mirror: $MIRROR/watch?v=$VIDEO_ID"
-            # Fixed: --socket-timeout use kiya aur syntax error hataya
-            if yt-dlp -f "bestvideo+bestaudio/best" \
-               --merge-output-format mp4 \
-               --no-check-certificates \
-               --socket-timeout 30 \
-               "$MIRROR/watch?v=$VIDEO_ID" -o "video.mp4"; then
-              SUCCESS=true
-              break
+            echo "Trying Mirror: $MIRROR"
+            if /usr/local/bin/yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 \
+               --socket-timeout 30 "$MIRROR/watch?v=$VIDEO_ID" -o "pro_video.mp4"; then
+              SUCCESS=true && break
             fi
           done
 
+          # Agar mirrors fail ho toh Direct Android API try karein
           if [ "$SUCCESS" = "false" ]; then
-            echo "Mirrors failed. Trying direct download with Android API..."
-            yt-dlp -f "bestvideo+bestaudio/best" \
-            --merge-output-format mp4 \
-            --extractor-args "youtube:player_client=android" \
-            "${{ env.VIDEO_URL }}" -o "video.mp4"
+            echo "Mirrors failed. Using Android API Bypass..."
+            /usr/local/bin/yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 \
+            --extractor-args "youtube:player_client=android" "${{ env.URL }}" -o "pro_video.mp4"
           fi
 
-          
-      - name: Upload to Cloud (GoFile)
+      - name: Upload to GoFile (Pro Storage)
         if: env.PROCESS == 'true'
         id: upload
         run: |
-          # Uploading file for 100MB+ support
-          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
-          if [ "$SERVER" == "null" ] || [ -z "$SERVER" ]; then SERVER="store1"; fi
-          
-          UPLOAD_RES=$(curl -F "file=@video.mp4" "https://$SERVER.gofile.io/contents/uploadfile")
-          DOWNLOAD_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage')
-          echo "DL_LINK=$DOWNLOAD_LINK" >> $GITHUB_ENV
+          # Best server dhoond kar upload karna
+          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name // "store1"')
+          UPLOAD_RES=$(curl -F "file=@pro_video.mp4" "https://$SERVER.gofile.io/contents/uploadfile")
+          DL_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage')
+          echo "FINAL_LINK=$DL_LINK" >> $GITHUB_ENV
 
-      - name: Send Link to Telegram
+      - name: Final Telegram Notification
         if: env.PROCESS == 'true'
         run: |
-          MESSAGE="✅ *Video Processing Complete!*%0A%0A📽️ Source: ${{ env.VIDEO_URL }}%0A🔗 Direct Download Link: ${{ env.DL_LINK }}"
+          MSG="✅ *Download Complete!*%0A%0A📽️ *Video:* ${{ env.URL }}%0A🔗 *Direct Link:* ${{ env.FINAL_LINK }}%0A%0A_Ready for 4K Editing!_"
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
-               -d "chat_id=${{ secrets.CHAT_ID }}&text=$MESSAGE&parse_mode=Markdown"
+               -d "chat_id=${{ secrets.CHAT_ID }}&text=$MSG&parse_mode=Markdown"
