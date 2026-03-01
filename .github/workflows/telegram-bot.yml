@@ -44,22 +44,33 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install ffmpeg jq -y
 
-      - name: Download 4K Video (Mirror Bypass)
+      - name: Download 4K Video (Multi-Mirror Bypass)
         if: env.PROCESS == 'true'
         run: |
-          # Video ID nikalna (Example: GPmksNOWiWs)
+          # Video ID nikalna
           VIDEO_ID=$(echo "${{ env.VIDEO_URL }}" | sed -n 's/.*v=\([^&?]*\).*/\1/p; s/.*be\/\([^&?]*\).*/\1/p')
           
-          # Invidious Instance (Mirror) ka use karke download karna
-          # Hum yahan 'inv.tux.rs' ya 'yewtu.be' use kar sakte hain
-          MIRROR_URL="https://inv.tux.rs/watch?v=$VIDEO_ID"
+          # Mirrors ki list (Yewtu.be, Invidious.io, etc.)
+          MIRRORS=("https://yewtu.be" "https://invidious.snopyta.org" "https://inv.tux.rs" "https://vid.puffyan.us")
           
-          echo "Downloading via Mirror: $MIRROR_URL"
-          
-          yt-dlp -f "bestvideo+bestaudio/best" \
-          --merge-output-format mp4 \
-          --no-check-certificates \
-          "$MIRROR_URL" -o "video.mp4"
+          SUCCESS=false
+          for MIRROR in "${MIRRORS[@]}"; do
+            echo "Trying Mirror: $MIRROR/watch?v=$VIDEO_ID"
+            if yt-dlp -f "bestvideo+bestaudio/best" \
+               --merge-output-format mp4 \
+               --no-check-certificates \
+               --timeout 30 \
+               "$MIRROR/watch?v=$VIDEO_ID" -o "video.mp4"; then
+              SUCCESS=true
+              break
+            fi
+          done
+
+          if [ "$SUCCESS" = false ]; then
+            echo "Saare mirrors fail ho gaye. Ab direct download with Proxy try kar rahe hain..."
+            # Final attempt: Direct download with a free proxy header
+            yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 --geo-bypass "${{ env.VIDEO_URL }}" -o "video.mp4"
+        
 
           
       - name: Upload to Cloud (GoFile)
