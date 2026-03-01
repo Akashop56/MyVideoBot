@@ -1,41 +1,36 @@
-name: Python YouTube Bot (24/7 Run)
+name: 24/7 Python Bot
 
 on:
   schedule:
-    # Restarts automatically every 5 hours before GitHub kills it
-    - cron: '0 */5 * * *' 
-  workflow_dispatch: # Manual start button
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10' # Python 3.10+ requirement
+          python-version: '3.10'
 
-      - name: Install FFmpeg & Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install ffmpeg -y
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install ffmpeg -y
 
-      - name: Install Python Dependencies
+      - name: Install Deps
         run: pip install -r requirements.txt
 
-        - name: Decode Cookies
+      - name: Decode Cookies
         run: |
-          # Base64 se vapas .txt mein convert karna safely
+          # Yeh command aapke secret ko sahi cookies.txt mein badal degi
           echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
-          # Check if file starts correctly
-          head -n 2 cookies.txt
+          # Sirf check karne ke liye (security ke liye delete kar sakte hain)
+          head -n 1 cookies.txt
 
-      - name: Run Bot
+      - name: Run
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
         run: python bot.py
-
-      
