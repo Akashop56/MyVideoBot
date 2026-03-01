@@ -27,8 +27,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Setup Cookies
-        run: echo "${{ secrets.YT_COOKIES }}" > cookies.txt
-
+        run: |
+          echo "${{ secrets.YT_COOKIES }}" > cookies.txt
+          # Validating if it's Netscape format
+          if ! grep -q "# Netscape HTTP Cookie File" cookies.txt; then
+            echo "ERROR: Cookies are not in Netscape format!"
+            exit 1
+          fi
       - name: Run Python Bot
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
