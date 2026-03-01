@@ -1,0 +1,70 @@
+name: 24/7 Telegram Video Downloader
+
+on:
+  schedule:
+    - cron: '*/5 * * * *' # Har 5 minute mein chalega
+  workflow_dispatch: # Manual test ke liye button dega
+
+jobs:
+  check-and-download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Latest Telegram Message
+        id: fetch_msg
+        run: |
+          # Telegram se latest message check karna
+          RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/getUpdates")
+          
+          # Message ka text aur time nikalna
+          LAST_MSG=$(echo "$RESPONSE" | jq -r '.result[-1].message.text')
+          MSG_DATE=$(echo "$RESPONSE" | jq -r '.result[-1].message.date')
+          CURRENT_DATE=$(date +%s)
+          
+          # Check karna ki message naya hai ya purana (300 seconds = 5 mins)
+          TIME_DIFF=$((CURRENT_DATE - MSG_DATE))
+          
+          if [[ "$TIME_DIFF" -le 330 ]]; then
+            if [[ "$LAST_MSG" == *"youtube.com"* ]] || [[ "$LAST_MSG" == *"youtu.be"* ]]; then
+              echo "Naya YouTube link mil gaya!"
+              echo "VIDEO_URL=$LAST_MSG" >> $GITHUB_ENV
+              echo "PROCESS=true" >> $GITHUB_ENV
+            else
+              echo "Link YouTube ka nahi hai."
+              echo "PROCESS=false" >> $GITHUB_ENV
+            fi
+          else
+            echo "Koi naya message nahi hai pichle 5 minute mein."
+            echo "PROCESS=false" >> $GITHUB_ENV
+          fi
+
+      - name: Install yt-dlp & Tools
+        if: env.PROCESS == 'true'
+        run: |
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          sudo apt-get update && sudo apt-get install ffmpeg jq -y
+
+      - name: Download 4K Video
+        if: env.PROCESS == 'true'
+        run: |
+          # Best video quality aur audio ko mp4 format mein merge karna
+          yt-dlp -f "bestvideo+bestaudio/best" --merge-output-format mp4 "${{ env.VIDEO_URL }}" -o "video.mp4"
+
+      - name: Upload to Cloud (GoFile)
+        if: env.PROCESS == 'true'
+        id: upload
+        run: |
+          # Uploading file for 100MB+ support
+          SERVER=$(curl -s https://api.gofile.io/servers | jq -r '.data.servers[0].name')
+          if [ "$SERVER" == "null" ] || [ -z "$SERVER" ]; then SERVER="store1"; fi
+          
+          UPLOAD_RES=$(curl -F "file=@video.mp4" "https://$SERVER.gofile.io/contents/uploadfile")
+          DOWNLOAD_LINK=$(echo "$UPLOAD_RES" | jq -r '.data.downloadPage')
+          echo "DL_LINK=$DOWNLOAD_LINK" >> $GITHUB_ENV
+
+      - name: Send Link to Telegram
+        if: env.PROCESS == 'true'
+        run: |
+          MESSAGE="✅ *Video Processing Complete!*%0A%0A📽️ Source: ${{ env.VIDEO_URL }}%0A🔗 Direct Download Link: ${{ env.DL_LINK }}"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_TOKEN }}/sendMessage" \
+               -d "chat_id=${{ secrets.CHAT_ID }}&text=$MESSAGE&parse_mode=Markdown"
