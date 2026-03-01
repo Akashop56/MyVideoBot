@@ -44,19 +44,22 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install ffmpeg jq -y
 
-      - name: Download 4K Video
+      - name: Download 4K Video (Mirror Bypass)
         if: env.PROCESS == 'true'
         run: |
-          # Sabse pehle Node.js install karein extraction fix karne ke liye
-          sudo apt-get install nodejs -y 
+          # Video ID nikalna (Example: GPmksNOWiWs)
+          VIDEO_ID=$(echo "${{ env.VIDEO_URL }}" | sed -n 's/.*v=\([^&?]*\).*/\1/p; s/.*be\/\([^&?]*\).*/\1/p')
           
-          # Android API ka use karke bypass karna
+          # Invidious Instance (Mirror) ka use karke download karna
+          # Hum yahan 'inv.tux.rs' ya 'yewtu.be' use kar sakte hain
+          MIRROR_URL="https://inv.tux.rs/watch?v=$VIDEO_ID"
+          
+          echo "Downloading via Mirror: $MIRROR_URL"
+          
           yt-dlp -f "bestvideo+bestaudio/best" \
           --merge-output-format mp4 \
-          --extractor-args "youtube:player_client=android,web" \
-          --geo-bypass \
           --no-check-certificates \
-          "${{ env.VIDEO_URL }}" -o "video.mp4"
+          "$MIRROR_URL" -o "video.mp4"
 
           
       - name: Upload to Cloud (GoFile)
