@@ -1,0 +1,36 @@
+name: Python YouTube Bot (24/7 Run)
+
+on:
+  schedule:
+    # Restarts automatically every 5 hours before GitHub kills it
+    - cron: '0 */5 * * *' 
+  workflow_dispatch: # Manual start button
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' # Python 3.10+ requirement
+
+      - name: Install FFmpeg & Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install ffmpeg -y
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup Cookies
+        run: echo "${{ secrets.YT_COOKIES }}" > cookies.txt
+
+      - name: Run Python Bot
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        # The script will keep running here continuously
+        run: python bot.py
