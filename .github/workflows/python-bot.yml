@@ -1,4 +1,4 @@
-name: 24/7 Python Bot
+name: 24/7 Pro Video Downloader
 
 on:
   schedule:
@@ -25,12 +25,12 @@ jobs:
 
       - name: Decode Cookies
         run: |
-          # Yeh command aapke secret ko sahi cookies.txt mein badal degi
+          # Base64 secret se cookies.txt banana
           echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
-          # Sirf check karne ke liye (security ke liye delete kar sakte hain)
+          # Sirf format check ke liye
           head -n 1 cookies.txt
 
-      - name: Run
+      - name: Run Bot
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
         run: python bot.py
