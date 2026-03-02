@@ -1,36 +1,46 @@
 name: 24/7 Pro Video Downloader
 
 on:
-  schedule:
-    - cron: '0 */5 * * *'
   workflow_dispatch:
+  schedule:
+    - cron: "0 */5 * * *"   # backup trigger every 5 hours
+
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 340   # ~5h 40m (safe before 6h limit)
+
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install ffmpeg -y
-
-      - name: Install Deps
-        run: pip install -r requirements.txt
-
-      - name: Decode Cookies
         run: |
-          # Base64 secret se cookies.txt banana
-          echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
-          # Sirf format check ke liye
-          head -n 1 cookies.txt
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-      - name: Run Bot
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -U yt-dlp
+
+      - name: Decode YouTube Cookies
+        run: |
+          echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+          echo "Cookies ready"
+
+      - name: Run Telegram Bot
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
-        run: python bot.py
+        run: |
+          python bot.py
