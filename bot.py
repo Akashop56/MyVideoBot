@@ -1,75 +1,89 @@
-import os
-import asyncio
-import logging
+import os, asyncio, logging, random, requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from duckduckgo_search import DDGS
+from bs4 import BeautifulSoup
 
-# Logging setup
+# Logging & Config
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
-
 TOKEN = os.getenv("TG_TOKEN")
 
-# Function to search image for free
-def search_image(query):
-    with DDGS() as ddgs:
-        # Player ki image search karna
-        results = ddgs.images(query, max_results=1)
-        if results:
-            return results[0]['image']
-    return None
+# Rate limit bypass: User-Agents list
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+]
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🏏 **Cricket Poll Bot Active!**\n\n"
-        "Bas player ka naam ya match topic likhein (e.g., 'Dhoni vs Kohli')\n"
-        "Main aapko Image aur YouTube ke liye Poll Caption bana kar dunga."
-    )
+def get_live_stats(player_name):
+    """Basic Scraping for recent match context (Free & No API Key)"""
+    try:
+        search_url = f"https://www.google.com/search?q={player_name.replace(' ', '+')}+last+match+score"
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        response = requests.get(search_url, headers=headers, timeout=5)
+        # Yaha hum sirf snippet nikal rahe hain context ke liye
+        soup = BeautifulSoup(response.text, 'html.parser')
+        snippet = soup.find('div', class_='BNeawe').get_text() if soup.find('div', class_='BNeawe') else "No recent stats found"
+        return snippet
+    except:
+        return "Stats temporary unavailable"
+
+def search_image_safe(query):
+    """Ratelimit handle karne ke liye try-except block"""
+    try:
+        with DDGS() as ddgs:
+            # Random delay to avoid 403
+            results = ddgs.images(f"{query} cricket hd", max_results=1)
+            return results[0]['image'] if results else None
+    except Exception as e:
+        print(f"Search Error: {e}")
+        return None
 
 async def handle_poll_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    topic = update.message.text
-    status = await update.message.reply_text(f"🔍 Searching for '{topic}' images & data...")
+    user_input = update.message.text
+    status = await update.message.reply_text("📊 Generating Pro Poll for SkyVerse...")
+
+    # Multi-player logic: "Dhoni vs Rohit vs Kohli"
+    players = [p.strip() for p in user_input.split("vs")]
+    
+    poll_text = f"🔥 **YOUTUBE COMMUNITY POLL** 🔥\n\n"
+    poll_text += f"❓ **Question:** Who is performing better in this season?\n\n"
+    
+    images = []
+    stats_summary = ""
+
+    for i, name in enumerate(players[:3], 1): # Max 3 players for clarity
+        img = await asyncio.to_thread(search_image_safe, name)
+        stats = await asyncio.to_thread(get_live_stats, name)
+        
+        if img: images.append(img)
+        poll_text += f"{i}️⃣ {name.title()}\n"
+        stats_summary += f"🏏 **{name.title()} Context:** {stats[:100]}...\n"
+        await asyncio.sleep(1) # Delay to prevent rate limit
+
+    poll_text += f"4️⃣ Other (Comment below!)\n\n"
+    poll_text += f"━━━━━━━━━━━━━\n{stats_summary}\n"
+    poll_text += f"✨ *Copy-Paste to YouTube Community Tab!*"
 
     try:
-        # 1. Image Search
-        img_url = await asyncio.to_thread(search_image, f"{topic} cricket hd photo")
-        
-        if not img_url:
-            await status.edit_text("❌ Image nahi mil payi. Kuch aur try karein.")
-            return
-
-        # 2. Automated Poll Captions (Creative logic)
-        # Hum topic ke hisab se caption customize kar sakte hain
-        poll_caption = (
-            f"🔥 **YOUTUBE COMMUNITY POLL** 🔥\n\n"
-            f"Topic: {topic}\n\n"
-            f"❓ **Question:** Aapka kya maanna hai is match/player ke baare mein?\n\n"
-            f"📊 **Options for YouTube:**\n"
-            f"1️⃣ Masterclass Performance 🌟\n"
-            f"2️⃣ Average/Theek-thaak 🏏\n"
-            f"3️⃣ Bad Luck today 💔\n"
-            f"4️⃣ Legend for a reason! 🐐\n\n"
-            f"✨ *Direct copy-paste karein aur YouTube pe viral ho jayein!*"
-        )
-
-        # 3. Photo send karna
-        await context.bot.send_photo(
-            chat_id=update.effective_chat.id,
-            photo=img_url,
-            caption=poll_caption,
-            parse_mode="Markdown"
-        )
+        if images:
+            # Pehli image ko main photo ki tarah bhejna
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=images[0],
+                caption=poll_text,
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(poll_text, parse_mode="Markdown")
         await status.delete()
-
     except Exception as e:
-        await status.edit_text(f"❌ Kuch error aaya: {str(e)}")
+        await status.edit_text(f"❌ Error: {str(e)}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bhejo players ke naam (e.g. Dhoni vs Rohit)")))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_poll_request))
-    
-    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
