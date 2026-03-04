@@ -1,220 +1,76 @@
 import os
 import asyncio
 import logging
-import math
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters,
-    ContextTypes,
-)
-from yt_dlp import YoutubeDL
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from duckduckgo_search import DDGS
 
-logging.basicConfig(level=logging.INFO)
+# Logging setup
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 TOKEN = os.getenv("TG_TOKEN")
-user_links = {}
 
-# ---------- Animated Progress Bar ----------
-def progress_bar(percent):
-    p = float(percent.replace('%','').strip())
-    filled = int(p // 10)
-    bar = "█" * filled + "░" * (10 - filled)
-    return f"[{bar}] {percent}"
+# Function to search image for free
+def search_image(query):
+    with DDGS() as ddgs:
+        # Player ki image search karna
+        results = ddgs.images(query, max_results=1)
+        if results:
+            return results[0]['image']
+    return None
 
-def progress_hook(d, context, chat_id, message_id):
-    if d["status"] == "downloading":
-        percent = d.get("_percent_str", "0%")
-        speed = d.get("_speed_str", "0B/s")
-        eta = d.get("_eta_str", "00:00")
-
-        text = (
-            f"⬇️ Downloading...\n"
-            f"{progress_bar(percent)}\n"
-            f"🚀 {speed} | ⏳ {eta}"
-        )
-
-        try:
-            asyncio.run_coroutine_threadsafe(
-                context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text=text,
-                ),
-                context.application.loop,
-            )
-        except:
-            pass
-
-
-# ---------- Start ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Send YouTube link.")
+    await update.message.reply_text(
+        "🏏 **Cricket Poll Bot Active!**\n\n"
+        "Bas player ka naam ya match topic likhein (e.g., 'Dhoni vs Kohli')\n"
+        "Main aapko Image aur YouTube ke liye Poll Caption bana kar dunga."
+    )
 
-
-# ---------- Handle Link ----------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
-
-    if "youtu" not in url:
-        return
-
-    user_links[update.effective_user.id] = url
-    await update.message.reply_text("🔍 Fetching available qualities...")
-
-    ydl_opts = {
-        "quiet": True,
-        "cookiefile": "cookies.txt",
-        "geo_bypass": True,
-        "noplaylist": True,
-    }
+async def handle_poll_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    topic = update.message.text
+    status = await update.message.reply_text(f"🔍 Searching for '{topic}' images & data...")
 
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, url, download=False)
-
-        formats = info.get("formats", [])
-        heights = sorted(
-            list(
-                set(
-                    f.get("height")
-                    for f in formats
-                    if f.get("height") and f.get("ext") == "mp4"
-                )
-            ),
-            reverse=True,
-        )
-
-        if not heights:
-            await update.message.reply_text("❌ No MP4 qualities found.")
+        # 1. Image Search
+        img_url = await asyncio.to_thread(search_image, f"{topic} cricket hd photo")
+        
+        if not img_url:
+            await status.edit_text("❌ Image nahi mil payi. Kuch aur try karein.")
             return
 
-        keyboard = []
-        row = []
-        for h in heights[:6]:  # max 6 buttons
-            row.append(
-                InlineKeyboardButton(f"{h}p", callback_data=str(h))
-            )
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-
-        if row:
-            keyboard.append(row)
-
-        keyboard.append([InlineKeyboardButton("⚡ Best", callback_data="best")])
-
-        await update.message.reply_text(
-            "🎥 Select Quality:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+        # 2. Automated Poll Captions (Creative logic)
+        # Hum topic ke hisab se caption customize kar sakte hain
+        poll_caption = (
+            f"🔥 **YOUTUBE COMMUNITY POLL** 🔥\n\n"
+            f"Topic: {topic}\n\n"
+            f"❓ **Question:** Aapka kya maanna hai is match/player ke baare mein?\n\n"
+            f"📊 **Options for YouTube:**\n"
+            f"1️⃣ Masterclass Performance 🌟\n"
+            f"2️⃣ Average/Theek-thaak 🏏\n"
+            f"3️⃣ Bad Luck today 💔\n"
+            f"4️⃣ Legend for a reason! 🐐\n\n"
+            f"✨ *Direct copy-paste karein aur YouTube pe viral ho jayein!*"
         )
 
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error:\n{str(e)}")
-
-
-# ---------- Download ----------
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    quality = query.data
-    user_id = query.from_user.id
-
-    if user_id not in user_links:
-        await query.edit_message_text("Session expired. Send link again.")
-        return
-
-    url = user_links[user_id]
-    status = await query.edit_message_text("🚀 Starting download...")
-
-    if not os.path.exists("downloads"):
-        os.makedirs("downloads")
-
-    if quality == "best":
-        format_string = "(bv*+ba/b)[ext=mp4]/best"
-    else:
-        format_string = f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best"
-
-    ydl_opts = {
-        "format": format_string,
-        "merge_output_format": "mp4",
-        "cookiefile": "cookies.txt",
-        "geo_bypass": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "concurrent_fragment_downloads": 5,
-        "noplaylist": True,
-        "outtmpl": "downloads/%(id)s.%(ext)s",
-        "progress_hooks": [
-            lambda d: progress_hook(
-                d,
-                context,
-                query.message.chat_id,
-                status.message_id,
-            )
-        ],
-    }
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(
-                ydl.extract_info, url, download=True
-            )
-            file_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".mp4"
-
-        await status.edit_text("⬆️ Uploading...")
-
-        file_size = os.path.getsize(file_path)
-
-        # -------- Auto send as video if small ----------
-        if file_size < 50 * 1024 * 1024:  # 50MB
-            with open(file_path, "rb") as f:
-                await context.bot.send_video(
-                    chat_id=query.message.chat_id,
-                    video=f,
-                    caption=f"🎬 {info.get('title','Video')}",
-                    supports_streaming=True,
-                )
-        else:
-            with open(file_path, "rb") as f:
-                await context.bot.send_document(
-                    chat_id=query.message.chat_id,
-                    document=f,
-                    caption=f"📁 {info.get('title','Video')}",
-                )
-
-        os.remove(file_path)
+        # 3. Photo send karna
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
+            photo=img_url,
+            caption=poll_caption,
+            parse_mode="Markdown"
+        )
         await status.delete()
 
     except Exception as e:
-        await status.edit_text(f"❌ Error:\n{str(e)}")
-
-
-# ---------- Crash Safe Restart ----------
-async def error_handler(update, context):
-    logging.error(msg="Exception while handling update:", exc_info=context.error)
+        await status.edit_text(f"❌ Kuch error aaya: {str(e)}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_error_handler(error_handler)
-
-    print("Bot Started...")
-    app.run_polling(drop_pending_updates=True)
-
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_poll_request))
+    
+    print("Bot is running...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    while True:
-        try:
-            main()
-        except Exception as e:
-            print(f"Bot crashed: {e}")
-            print("Restarting in 5 seconds...")
-            asyncio.sleep(5)
+    main()
